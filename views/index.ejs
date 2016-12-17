@@ -1,0 +1,403 @@
+<html>
+   <head>
+      <script src="/javascripts/index.js" type="text/javascript"></script>
+      <script  data-main="/javascripts/index.js" src="/javascripts/jquery.js" type="text/javascript"></script>
+      <script  data-main="/javascripts/index.js" src="/javascripts/underscore.js" type="text/javascript"></script>
+      <script  data-main="/javascripts/index.js" src="/javascripts/backbone.js" type="text/javascript"></script>
+      <script type="text/javascript">
+         _.templateSettings = {
+          interpolate: /\{\{=([^}]*)\}\}/g,
+          evaluate: /\{\{(?!=)(.*?)\}\}/g
+        };
+                       // Your Client ID can be retrieved from your project in the Google
+         // Developer Console, https://console.developers.google.com
+         var CLIENT_ID = '840746466796-8iigl2prf4b39vsferadfkeqesp24dpl.apps.googleusercontent.com';
+         var SCOPES = ['https://www.googleapis.com/auth/gmail.readonly'];
+         
+         /**
+          * Check if current user has authorized this application.
+          */
+         function checkAuth() {
+           gapi.auth.authorize(
+             {
+               'client_id': CLIENT_ID,
+               'scope': SCOPES.join(' '),
+               'immediate': true
+             }, handleAuthResult);
+         }
+         
+         /**
+          * Handle response from authorization server.
+          *
+          * @param {Object} authResult Authorization result.
+          */
+         function handleAuthResult(authResult) {
+           var authorizeDiv = document.getElementById('authorize-div');
+           if (authResult && !authResult.error) {
+             // Hide auth UI, then load client library.
+             authorizeDiv.style.display = 'none';
+             console.log(authResult);
+             loadGmailApi();
+           } else {
+             // Show auth UI, allowing the user to initiate authorization by
+             // clicking authorize button.
+             authorizeDiv.style.display = 'inline';
+           }
+         }
+         
+         /**
+          * Initiate auth flow in response to user clicking authorize button.
+          *
+          * @param {Event} event Button click event.
+          */
+         function handleAuthClick(event) {
+           gapi.auth.authorize(
+             {client_id: CLIENT_ID, scope: SCOPES, immediate: false},
+             handleAuthResult);
+           return false;
+         }
+         
+         /**
+          * Load Gmail API client library. List labels once client library
+          * is loaded.
+          */
+         function loadGmailApi() {
+           gapi.client.load('gmail', 'v1', function() {
+         
+             listMessages();
+           });
+           
+           //todo
+         }
+         
+         
+         function create(data, record){
+         
+                var Mail = Backbone.Model.extend( {
+         
+                 defaults: {
+                     subject: '',
+                     read: false,
+                     star: false,
+                     selected:false,
+                     archived:false,
+                     label: '',
+                     id: '',
+                     snippet: ''
+                 },
+                 initialize: function(options){
+                  this.id = options.id;
+                  this.snippet = options.snippet;
+                 },
+                 url: gapi.client.gmail.users.messages.get({
+                       'userId': 'me',
+                       'id': this.id
+                     }),
+                 markRead: function() {
+                     this.save( {read: true } );
+                 },
+         
+                 starMail: function() {
+                     this.save( { star: !this.get("star")} );
+                 },
+         
+                 archive: function(){
+                     this.save( { archived: true, selected:false} );
+                 },
+         
+                 selectMail: function() {
+                     this.save( { selected: !this.get("selected")} );
+                 },
+         
+                 setLabel: function(label){
+                     this.save( { label: label } );
+                 }
+             });
+         
+         
+         
+             var MailList = Backbone.Collection.extend({
+                 model: Mail,
+                 
+                 url: gapi.client.gmail.users.messages.list({
+                   'userId': 'me',
+                   'labelIds': 'INBOX',
+                   'maxResults': 2
+                 }),
+                 unread: function() {
+                     return _(this.filter( function(mail) { return !mail.get('read');} ) );
+                 },
+         
+                 inbox: function(){
+                     return _(this.filter( function(mail) { return !mail.get('archived');}));
+                 },
+         
+                 starred: function(){
+                     return _(this.filter( function(mail) { return mail.get('star');}));
+                 },
+         
+                 unread_count: function() {
+                     return (this.filter ( function(mail) { return !mail.get('read');})).length;
+                 },
+         
+                 labelled:function(label){
+                     return _(this.filter( function(mail) { return label in mail.get('label') } ));
+                 },
+         
+                 starcount: function(){
+                     return (this.filter( function(mail) { return mail.get('star')})).length;
+                 },
+         
+                 search: function(word){
+                     if (word=="") return this;
+         
+                     var pat = new RegExp(word, 'gi');
+                     return _(this.filter(function(mail) { 
+                         return pat.test(mail.get('subject')) || pat.test(mail.get('sender')); }));
+                 },
+                 comparator: function(mail){
+                     return -mail.get('timestamp');
+                 }
+         
+             });
+         
+             var MailView = Backbone.View.extend({
+                 tagName: "li",
+         
+                 template: _.template( $("#actions-template").html()),
+         
+                 events: {
+                     "click .mail-subject,.sender" : "markRead",
+                     "click .star" : "star",
+                     "click .check" : "select"
+                 },
+         
+                 initialize: function() {
+                     this.model.bind('change', this.render, this);
+                 },
+         
+                 render: function() {
+                     $(this.el).html( this.template(this.model.toJSON()) );
+                     return this;
+                 },
+         
+                 unrender: function(){
+                     $(this.el).remove();
+                 },
+         
+                 markRead: function() {
+                     this.model.markRead();
+                 },
+         
+                 star: function() {
+                     this.model.starMail();
+                 },
+         
+                 select: function(){
+                     this.model.selectMail();
+                 }
+             });
+         
+         
+             var InboxView = Backbone.View.extend({
+                 template: _.template($("#summary-tmpl").html()),
+         
+                 el: $("#mailapp"),
+         
+                 initialize: function(){
+         
+                     this.collection.bind('change', this.renderSideMenu, this);
+                     this.render(this.collection);
+                     this.renderSideMenu();
+                 },
+         
+                 events: {
+                     "change #labeler" : "applyLabel",
+                     "click #markallread" : "markallread",
+                     "click #archive" : "archive",
+                     "click #allmail" : "allmail",
+                     "click #inbox": "inbox",
+                     "click #starred": "starred",
+                     "keyup #search" : "search"
+                 },
+         
+                 search: function(){
+                     this.render(this.collection.search($("#search").val()));
+                 },
+                 starred: function(){
+                     this.render(this.collection.starred());
+                 },
+         
+                 inbox: function(){
+                     this.render(this.collection.inbox());
+                 },
+         
+                 allmail: function(){
+                     this.render(this.collection);
+                 },
+         
+                 markallread : function(){
+                     this.collection.each(function(item){
+                       item.markRead();
+                     }, this);
+                 },
+         
+                 applyLabel: function(){
+         
+                     var label = $("#labeler").val();
+                     this.collection.each(function(item){
+                         if(item.get('selected') == true){
+                           item.setLabel(label);
+                         }
+                     }, this);
+                 },
+         
+                 archive: function(){
+                     this.collection.each(function(item){
+                         if(item.get('selected') == true){
+                           item.archive();
+                         }
+                     }, this);
+                     this.render(this.collection.inbox());
+                 },
+         
+                 render: function(records){
+                     $('ul#mail-list', this.el).html('');
+                     var self = this;
+                     records.each(function(item){
+                         self.addOne(item);
+                     }, this);
+                 },
+         
+                 renderSideMenu: function(){
+                     $("#sidemenu").html( this.template(
+                         {'inbox': this.collection.unread_count(), 
+                          'starred':this.collection.starcount(),}));
+                 },
+         
+                 addOne: function (mail) {
+                     var itemView = new MailView({ model: mail});
+         
+                     $('ul#mail-list', this.el).append(itemView.render().el);
+                 }
+             });
+             
+             
+         }
+         /**
+          * Print all Labels in the authorized user's inbox. If no labels
+          * are found an appropriate message is printed.
+          */
+         
+         
+         
+         function listMessages() {
+         
+         // Todo open Backbone page
+          
+             //requirejs(['/javascripts/jquery.js', '/javascripts/underscore.js', '/javascripts/backbone.js'],
+             //function   ($, _,   Backbone) {
+              console.log($);
+                
+                create();
+                
+                var data = [];
+                var list = new MailList(data);
+                list.fetch();
+                var App = new InboxView({collection:list}) ;
+         
+                var request1= gapi.client.gmail.users.messages.list({
+                   'userId': 'me',
+                   'labelIds': 'INBOX',
+                   'maxResults': 2
+                 });
+               
+                 request1.execute(function(resp) {
+                   var messages = resp.messages;
+                   var output = "<br>Query returned " + messages.length + " messages:<br>";
+                   for(var i = 0; i < messages.length; i++) {
+         
+                     var messageRequest = gapi.client.gmail.users.messages.get({
+                       'userId': 'me',
+                       'id': messages[i].id
+                     });
+         
+                       messageRequest.execute(function(message){
+                         document.getElementById("output").appendChild(document.createTextNode( i +"." + message.id + " : "+ message.snippet + '\n\n\n\n\n'));
+                       //data.push(message);
+                       var mail = new Mail({id: message.id, snippet: message.snippet});
+                       list.add(mail);
+
+                      // create(tempdata, message);
+                       create(data, message);
+                       //output += message.id + " : "+ message.snippet +"<br>";
+                       });
+                
+                     //
+                   }
+
+                  // console.log(output)
+                   //document.getElementById("content").innerHTML += output;
+                 });
+                
+             //});
+         
+             
+             
+           
+           
+         }
+         
+         
+         /**
+          * Append a pre element to the body containing the given message
+          * as its text node.
+          *
+          * @param {string} message Text to be placed in pre element.
+          */
+         function appendPre(message) {
+           var pre = document.getElementById('output');
+           var textContent = document.createTextNode(message + '\n');
+           pre.appendChild(textContent);
+         }
+         
+      </script>
+      <script src="https://apis.google.com/js/client.js?onload=checkAuth"></script>
+      
+   </head>
+   <body>
+      <div id="authorize-div" >
+         <span>Authorize access to Gmail API</span>
+         <!--Button for the user to click to initiate auth sequence -->
+         <button id="authorize-button" onclick="handleAuthClick(event)">
+         Authorize
+         </button>
+      </div>
+    <div id="output"></div>
+      <div id="mailapp"  > 
+      <h1>MailBox</h1> 
+        <span style="margin-left:124px;">
+        <select id="labeler">
+          <option value=""> Apply Label </option>
+          
+        </select> 
+      </span>
+      <span> <button id="markallread">Mark all as Read</button></span>
+      <span> <button id="archive">Archive</button></span>
+      <span> <input type="text" id="search" placeholder="Type to filter"/> </span>
+      <div class="content"> 
+        <div id="summary" style="float:left;width:100px;">
+            <ul id="sidemenu">
+            </ul>
+        </div>
+        <div id="mails" style="float:left;"> 
+            <ul id="mail-list"></ul> 
+        </div> 
+      </div> 
+
+    </div> 
+  </body>
+  <script type="text/template" id="actions-template">
+    <a class="btn">{{= label }}</a>
+  </script>
+</html>
